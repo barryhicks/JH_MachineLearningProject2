@@ -1,0 +1,104 @@
+
+This project analyzes data from accelerometers on the belt, forearm, arm, and dumbell of
+6 exercise participants. Each participant was asked to perform barbell lifts correctly
+and incorrectly in 5 different ways. More information is available from the website here:  http://groupware.les.inf.puc-rio.br/har
+(see the section on the Weight Lifting Exercise Dataset).
+
+The data includes a test and training set. The training set has a "classe" variable 
+which gives the predicted result (5 levels of "correct" to "incorrect"), along with
+a large number of input variables giving the accelerometer values and other data
+for each reading. The test set contains 20 readings, with input variables but no predicted result.
+
+To determine a good model to fit the data, we tried a number of approaches, including
+generalized linear models for multinomial data (glmnet), random forests, and multinomial
+models including those from the mnet and mlogit packages. Based on these tests, random
+forests appeared to give the best results.
+
+Our first task is to clean the data, as there are columns with many NA values and
+also #DIV/0 values. We elected to remove these columns, as there are still a large
+number of columns in the data set. There were also a number of columns which are
+not useful as predictors, such as user name and time stamps. We eliminate these
+columns from the data set as well.
+
+```{r}
+train <- read.csv("pml-training.csv") # load the training and test sets
+test <- read.csv("pml-testing.csv")
+train2 <- train[,colSums(is.na(train)) == 0] # get rid of columns with NA values
+test2 <- test[,colSums(is.na(test)) == 0]
+out = c() # get rid of columns with "#DIV/0!" values
+for (i in 1:ncol(train2)) {
+  if (any(train2[,i] == '#DIV/0!'))
+    out = c(out,i)
+}
+train3 <- train2[,-out]
+ytrain = train3[,60] # select outcome (y) and predictors (x's)
+xtrain = train3[,-60]
+ytest = test2[,60]
+xtest = test2[,-60]
+# eliminate X index, user name, time stamps, new window y/n, and num_window, as these
+# don't make sense as predictors
+xtrain2 <- xtrain[,c(-1:-7)]
+xtest2 <- xtest[,c(-1:-7)]
+```
+
+We next do cross-validation, to evaluate the randomForest model and predict the
+expected out of sample error. We use the caret package to do a 5-fold cross validation,
+building a model on part of the training set data and testing it on the rest, for each
+of the 5 folds. This gives us 5 estimates of the out of sample error.
+
+```{r, message=F, warning=F}
+library(caret)
+library(randomForest)
+```
+```{r}
+idx <- createFolds(ytrain, k=5) # Cross validation
+cvx = list()
+cvy = list()
+cvx[[1]] <- xtrain2[-1*(idx$Fold1),]
+cvx[[2]] <- xtrain2[-1*(idx$Fold2),]
+cvx[[3]] <- xtrain2[-1*(idx$Fold3),]
+cvx[[4]] <- xtrain2[-1*(idx$Fold4),]
+cvx[[5]] <- xtrain2[-1*(idx$Fold5),]
+cvy[[1]] <- ytrain[-1*(idx$Fold1)]
+cvy[[2]] <- ytrain[-1*(idx$Fold2)]
+cvy[[3]] <- ytrain[-1*(idx$Fold3)]
+cvy[[4]] <- ytrain[-1*(idx$Fold4)]
+cvy[[5]] <- ytrain[-1*(idx$Fold5)]
+cvmod = list()
+cvpred = list()
+cvaccr = list()
+for (i in 1:5) { # for each fold, build model, predict on remaining values, and get error
+  cvmod[[i]] <- randomForest(cvx[[i]],cvy[[i]],ntree=10)
+  cvpred[[i]] <- predict(cvmod[[i]], as.matrix(cvx[[i]]))
+  cvaccr[[i]] <- sum(cvpred[[i]] == cvy[[i]])/length(cvy[[i]])
+}
+```
+
+The errors for each of the 5 folds are `r cvaccr[[1]]`, `r cvaccr[[2]]`,
+`r cvaccr[[3]]`, `r cvaccr[[4]]`, and `r cvaccr[[5]]`. Thus the out of sample error 
+rates appear to be very low.
+
+We next build a model based on the entire training set. The confusion matrix shows
+that the model predicts the training set well:
+
+```{r}
+model <- randomForest(xtrain2,ytrain,ntree=10) # train on whole training set
+pred <- predict(model, as.matrix(xtrain2))
+accr <- sum(pred == ytrain)/length(ytrain)
+model$confusion
+```
+
+And the following plot shows the error rates dropping as more trees are added to the
+random forest model:
+
+```{r}
+plot(model)
+```
+
+We lastly use the model to predict the outcome for the 20 rows of the test set:
+
+```{r}
+pred2 <- predict(model, as.matrix(xtest2)) # predict based on testing set
+pred2
+```
+
